@@ -1,1 +1,20 @@
+# Experiment Meta
+epochs: 5
+batch_size: 32
+learning_rate: 0.001
+val_interval: 1
 
+# Hardware & Scaling
+mixed_precision: true
+grad_accumulation_steps: 1
+max_grad_norm: 1.0
+
+# Model Plugin
+model_name: "SimpleMLP"
+model_params:
+  input_dim: 10
+  hidden_dim: 64
+
+# Data Plugin
+data_params:
+  batch_size: 32
