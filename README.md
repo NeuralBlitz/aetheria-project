@@ -48,7 +48,7 @@ Complexity is the enemy of stability. Aetheria is built upon four immutable laws
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/aetheria-project.git
+git clone https://github.com/NeuralBlitz/aetheria-project.git
 cd aetheria_project
 
 # Install in editable mode with development dependencies
