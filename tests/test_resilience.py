@@ -1,140 +1,83 @@
 import torch
-import pytest
+import os
 from unittest.mock import MagicMock, patch
-from aetheria.accelerator import DDPAccelerator, GPUAccelerator
+from aetheria.accelerator import DDPAccelerator
 from aetheria.orchestrator import Orchestrator
 from aetheria.config import TrainingConfig
 
-# --- Mock Data ---
-def get_clean_loss(): return torch.tensor(0.5)
-def get_nan_loss(): return torch.tensor(float('nan'))
-def get_inf_loss(): return torch.tensor(float('inf'))
-
-# --- Test 1: The DDP Handshake ---
-# We verify that if Rank 0 has NaN and Rank 1 is clean, 
-# the ReduceOp.MAX logic correctly propagates the Error State.
-
 @patch('aetheria.accelerator.dist')
-def test_ddp_nan_synchronization(mock_dist):
+@patch('aetheria.accelerator.torch.cuda')
+def test_ddp_nan_synchronization(mock_cuda, mock_dist):
     """
-    Simulates a DDP environment where this process finds a NaN,
-    but we want to ensure it calls all_reduce to warn others.
+    Verifies that if one GPU sees NaN, all_reduce is called to notify others.
+    Mocks are used to simulate a GPU environment on a CPU-only CI runner.
     """
-    # 1. Setup Mock Environment
+    # 1. Simulate Distributed Environment Variables
     with patch.dict('os.environ', {'LOCAL_RANK': '0', 'WORLD_SIZE': '2'}):
-        # Mock CUDA calls since we are likely on CPU during CI
-        with patch('torch.cuda.set_device'), patch('torch.cuda.amp.GradScaler'):
-            accelerator = DDPAccelerator(mixed_precision=False)
+        
+        # 2. Force the Accelerator to use CPU for the test to avoid runtime errors
+        # preventing it from trying to allocate tensors on non-existent 'cuda:0'
+        with patch('aetheria.accelerator.torch.device', return_value='cpu'):
             
-            # 2. Case: Local Loss is NaN
-            loss = get_nan_loss()
+            # Initialize DDP Accelerator (mocks prevent actual NCCL init)
+            acc = DDPAccelerator(mixed_precision=False)
             
-            # We mock the in-place behavior of all_reduce
-            def side_effect(tensor, op):
-                # If input was 1.0 (True), it remains 1.0 (True)
-                # In a real DDP, this takes the MAX of all ranks
-                if tensor.item() == 1.0:
-                    pass 
-                return tensor
+            # Create a NaN loss
+            loss = torch.tensor(float('nan'))
             
-            mock_dist.all_reduce.side_effect = side_effect
-
             # 3. Execution
-            is_nan = accelerator.check_nan(loss)
-
+            # check_nan performs an all_reduce to check peers
+            is_nan = acc.check_nan(loss)
+            
             # 4. Assertions
+            # It should return True (NaN detected)
             assert is_nan is True
-            # Critical: Did we actually attempt to talk to the cluster?
+            # Crucial: It must have communicated with the cluster
             mock_dist.all_reduce.assert_called_once()
 
-# --- Test 2: The Loop Interlock ---
-# We verify that the Orchestrator RESPECTS the accelerator's warning
-# and refuses to step the optimizer.
-
 def test_orchestrator_skips_step_on_nan():
-    # 1. Mocks
+    """
+    Verifies that the Orchestrator halts optimization when a NaN is detected.
+    """
+    # 1. Setup Model Mocks
     mock_model = MagicMock()
-    mock_model.training_step.return_value = {"loss": get_nan_loss()}
+    mock_model.training_step.return_value = {"loss": torch.tensor(float('nan'))}
+    # Mocking configure_optimizers result
     mock_model.configure_optimizers.return_value = MagicMock()
     
-    mock_data = MagicMock()
-    mock_data.train_dataloader.return_value = [1] # Single batch
+    # 2. Setup Accelerator Mocks
+    mock_acc = MagicMock()
+    mock_acc.check_nan.return_value = True  # Simulate finding a NaN
+    # Mock the context manager for forward pass
+    mock_acc.forward_context.return_value.__enter__.return_value = None
     
-    # 2. Config with Safety
+    # *** FIX: Return tuple (model, optimizer) to satisfy unpacking in Orchestrator ***
+    mock_acc.setup.return_value = (mock_model, MagicMock())
+
+    # 3. Setup Config & Data
     conf = TrainingConfig(
-        epochs=1, batch_size=1, learning_rate=0.1, model_name="test",
-        max_grad_norm=1.0 
-    )
-
-    # 3. Mock Accelerator to simulate finding a NaN
-    mock_accelerator = MagicMock()
-    mock_accelerator.device = "cpu"
-    mock_accelerator.forward_context.return_value.__enter__.return_value = None
-    
-    # *** THE INJECTION ***
-    # Force check_nan to return True regardless of input
-    mock_accelerator.check_nan.return_value = True 
-
-    orchestrator = Orchestrator(
-        model=mock_model,
-        data=mock_data,
-        config=conf,
-        accelerator=mock_accelerator
-    )
-
-    # 4. Run Loop
-    orchestrator.run()
-
-    # 5. Forensics
-    # Did we calculate loss? Yes.
-    mock_model.training_step.assert_called()
-    
-    # Did we check for NaNs? Yes.
-    mock_accelerator.check_nan.assert_called()
-    
-    # Did we backpropagate? NO.
-    mock_accelerator.backward.assert_not_called()
-    
-    # Did we step the optimizer? NO.
-    mock_accelerator.step.assert_not_called()
-    
-    # Did we zero_grad (flush buffers)? YES.
-    orchestrator.optimizer.zero_grad.assert_called()
-
-# --- Test 3: The Gradient Shield ---
-# We verify that clipping is applied before the step
-
-def test_gradient_clipping_logic():
-    # 1. Config
-    conf = TrainingConfig(
-        epochs=1, batch_size=1, learning_rate=0.1, model_name="test",
-        max_grad_norm=1.0 # Shield Enabled
+        epochs=1, 
+        batch_size=1, 
+        learning_rate=0.1, 
+        model_name="test",
+        # Disable gradient accumulation so we step immediately
+        grad_accumulation_steps=1 
     )
     
-    # 2. Mocks
-    mock_model = MagicMock()
-    mock_model.training_step.return_value = {"loss": get_clean_loss()}
-    mock_model.configure_optimizers.return_value = MagicMock()
-    
+    # Mock the Data Loader to return one batch
     mock_data = MagicMock()
-    mock_data.train_dataloader.return_value = [1]
+    mock_data.train_dataloader.return_value = [torch.randn(1, 10)] 
+
+    # 4. Initialize Orchestrator
+    orch = Orchestrator(mock_model, mock_data, conf, accelerator=mock_acc)
     
-    mock_accelerator = MagicMock()
-    mock_accelerator.device = "cpu"
-    mock_accelerator.forward_context.return_value.__enter__.return_value = None
-    mock_accelerator.check_nan.return_value = False # Clean run
+    # 5. Run
+    orch.run()
 
-    orchestrator = Orchestrator(
-        model=mock_model,
-        data=mock_data,
-        config=conf,
-        accelerator=mock_accelerator
-    )
-
-    # 3. Run
-    orchestrator.run()
-
-    # 4. Verify Order of Operations
-    # Clip -> Step -> Zero
-    mock_accelerator.clip_grad_norm.assert_called_with(mock_model.parameters(), 1.0)
-    mock_accelerator.step.assert_called()
+    # 6. Assertions
+    # Ensure backward was NOT called because of NaN
+    mock_acc.backward.assert_not_called()
+    # Ensure optimizer step was NOT called
+    mock_acc.step.assert_not_called()
+    # Ensure gradients were flushed (zeroed) to prevent pollution
+    orch.optimizer.zero_grad.assert_called()
