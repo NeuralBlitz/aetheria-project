@@ -29,14 +29,12 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Replace with your HF repo path
-          HF_REPO="https://huggingface.co/NuralNexus/aetheria-project"
+          # 1. Set Git Identity
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
           
-          # Add HF remote
-          git remote add hf $HF_REPO
+          # 2. Add the HF remote with the token embedded for authentication
+          git remote add hf https://NuralNexus:$HF_TOKEN@huggingface.co/NuralNexus/aetheria-project
           
-          # Commit & push
-          git add .
-          git commit -m "Sync from GitHub" || echo "No changes to commit"
-          git push hf main --force
-
+          # 3. Force push to the Hugging Face main branch
+          git push -f hf main
