@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aetheria"
+version = "10.0.0"
+description = "A SOLID, Scale-Agnostic, Resilient Deep Learning Framework"
+readme = "README.md"
+authors = [{name = "Architect", email = "admin@aetheria.ai"}]
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.1.0",
+    "pydantic>=2.0.0",
+    "loguru>=0.7.0",
+    "typer>=0.9.0",
+    "pyyaml>=6.0"
+]
+
+[project.optional-dependencies]
+dev = ["wandb", "pytest", "black", "isort"]
+
+[project.scripts]
+aetheria = "cli:app"
+
+[tool.setuptools.packages.find]
+include = ["aetheria*", "plugins*"]
