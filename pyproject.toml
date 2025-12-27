@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "aetheria"
 version = "10.0.0"
 description = "A SOLID, Scale-Agnostic, Resilient Deep Learning Framework"
-authors = [{name = "Architect", email = "admin@aetheria.ai"}]
+authors = [{name = "Nural Nexus", email = "nuralnexus@icloud.com"}]
 dependencies = [
     "torch>=2.1.0",
     "numpy",
