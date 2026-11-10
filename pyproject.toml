@@ -22,5 +22,8 @@ dev = ["wandb", "pytest"]
 [project.scripts]
 aetheria = "cli:app"
 
+[tool.setuptools]
+py-modules = ["cli"]
+
 [tool.setuptools.packages.find]
 include = ["aetheria*", "plugins*"]
